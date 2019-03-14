@@ -1,5 +1,20 @@
 #!/usr/bin/env sh
 
+function usage {
+	echo "  rs.sh [mode] [args...]"
+	echo
+	echo "  MODES:"
+	echo "\tMode\tArgs\t\tDescription"
+	echo "\t-----------------------------------------------"
+	echo "\tadd\t[URLs]\t\tAdd feed URLs to config"
+	echo "\tfix\t[no args]\tTest and fix config"
+	echo "\tupdate\t[no args]\tCheck feeds for new"
+	echo "\ttest\t[URLs]\t\tTest feed URLs if valid"
+	echo "\timport\t[files/URLs]\tImport OPML files"
+	echo "\thelp\t[no args]\tPrint this message"
+	echo
+}
+
 # Tests is jq can parse the JSON successfully
 function is_valid_json {
 	if echo "$1" | jq -e . >/dev/null 2>&1; then
@@ -67,10 +82,19 @@ function try_feed {
 	return 0
 }
 
+# Test if string is URL
+function is_url {
+	if echo "$1" | grep -qoP '^(http(s)?:\/\/.)?(www\.)?[-a-zA-Z0-9@:%._\+~#=]{2,256}\.[a-z]{2,6}\b([-a-zA-Z0-9@:%_\+.~#?&//=]*)$'; then
+		return 0
+	else
+		return 1
+	fi
+}
+
 # Test and add feed to config file
 function add_feed {
 	# Test if url is valid http(s) link
-	if ! echo "$1" | grep -qoP '^(http(s)?:\/\/.)?(www\.)?[-a-zA-Z0-9@:%._\+~#=]{2,256}\.[a-z]{2,6}\b([-a-zA-Z0-9@:%_\+.~#?&//=]*)$'; then
+	if ! is_url "$1"; then
 		echo "ERROR: Invalid URL \"$1\""
 		return 1
 	fi
@@ -136,20 +160,28 @@ function send_alert_mrss {
 
 # Import OPML file to config
 function import_opml {
+	# Check if file or URL and get contents
+	if [ -e "$1" ] && [ -s "$1" ]; then
+		js=$(cat "$1" | tr '\r\n' ' ' | xml2json)
+	elif is_url "$1"; then
+		js=$(curl -s "$1")
+	else
+		echo "ERROR: Invalid URL/File \"$1\""
+		return 1
+	fi
 	# Convert OPML to JSON and test it
-	js=$(cat "$1" | tr '\r\n' ' ' | xml2json)
 	if [ $? != 0 ] || ! is_valid_json "$js"; then
-		echo "ERROR: File \"$1\" not valid XML"
+		echo "ERROR:\"$1\" not valid XML"
 		return 1
 	fi
 	# Test if path .opml.body.outline exists
 	if ! echo "$js" | jq -e ".opml.body.outline" &>/dev/null; then
-		echo "ERROR: File \"$1\" not valid OPML #2"
+		echo "ERROR: \"$1\" not valid OPML #2"
 		return 1
 	fi
 	# Test if each outline contains xmlUrl field
 	if [ ! $(echo "$js" | jq ".opml.body.outline.outline | length" 2>&1) -eq $(echo "$js" | jq '.opml.body.outline.outline[]["@xmlUrl"]' 2>&1 | wc -l) ]; then
-		echo "ERROR: File \"$1\" not valid OPML #2"
+		echo "ERROR: \"$1\" not valid OPML #2"
 		return 1
 	fi
 
@@ -274,7 +306,12 @@ case "$1" in
 		;;
 	test) handle_func="test_feed" ;;
 	import) handle_func="import_opml" ;;
+	help)
+		usage
+		exit 0
+		;;
 	*)
+		usage
 		echo "ERROR: Unknown argument: \"$1\""
 		exit -1
 		;;
